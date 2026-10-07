@@ -1,0 +1,36 @@
+#!/bin/sh
+# jq (json2dir.jq) owns UTF-8 checking, JSON parsing, validation, traversal and shell
+# generation; this launcher only moves bytes and runs the generated script.
+set -eu
+
+if [ "$#" -ne 0 ]; then
+  printf '%s\n' 'Usage: json2dir < file.json' >&2
+  exit 2
+fi
+
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+
+task_tmp=$(umask 077; mktemp -d "${TMPDIR:-/tmp}/json2dir.XXXXXXXXXX")
+trap 'rm -rf -- "$task_tmp"' 0
+trap 'exit 1' HUP INT TERM
+
+if ! (umask 077; cat > "$task_tmp/input.json"); then
+  printf '%s\n' "json2dir: couldn't read stdin" >&2
+  exit 1
+fi
+
+# jq reads the raw text (--rawfile, not jq's own JSON parser). The script is only run if
+# jq succeeded and the evaluator wrote its end marker as the last line.
+if ! (
+  umask 077
+  "${JSON2DIR_JQ:-jq}" -n -j --rawfile input "$task_tmp/input.json" \
+    -f "$script_dir/json2dir.jq" > "$task_tmp/tree.sh"
+); then
+  exit 1
+fi
+if [ "$(tail -n 1 "$task_tmp/tree.sh")" != '# json2dir: end' ]; then
+  printf '%s\n' 'json2dir: the evaluator did not finish' >&2
+  exit 1
+fi
+
+"${JSON2DIR_SHELL:-/bin/sh}" "$task_tmp/tree.sh"
